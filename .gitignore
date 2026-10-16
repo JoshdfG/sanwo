@@ -1,0 +1,8 @@
+/target
+**/target
+Cargo.lock.bak
+*.swp
+.DS_Store
+test_snapshots/
+.soroban/
+deploy-output.env

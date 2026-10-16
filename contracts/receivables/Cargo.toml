@@ -1,0 +1,16 @@
+[package]
+name = "receivables"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+capital-pool = { path = "../capital-pool" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
