@@ -1,78 +1,73 @@
-# Sanwo Finance — PayFi POC
+# Sanwo Contracts
 
-Two Soroban smart contracts on Stellar Testnet demonstrating the core loan
-loop for Sanwo Finance: **a borrower submits a receivable on-chain and
-receives stablecoin capital from a pool in return.**
+Soroban smart contracts for Sanwo, receivables financing on Stellar. A business
+submits an invoice its client owes, and the pool advances 75% of it in the same
+transaction. When the client pays, the advance is marked repaid on-chain.
 
-This is a proof-of-concept, not the full six-contract protocol. Scope is
-intentionally narrow — see [What This POC Is Not](#what-this-poc-is-not).
+This is the proof of concept: two contracts, deployed on Stellar testnet, running
+the core advance loop end to end. It is deliberately narrower than the full
+protocol. See [Limitations](#limitations).
 
 ```
 contracts/
-  capital-pool/      Holds testnet USDC, disburses loans, tracks pool stats
-  receivables/        Accepts invoices, computes 75% LTV, calls into the pool
+  capital-pool/   Holds the pool's tokens, takes deposits, pays advances, tracks stats
+  receivables/    Registers invoices, computes the 75% advance, calls the pool to pay it
 scripts/
-  deploy.sh           End-to-end testnet deploy + seed + one full loan cycle
+  deploy.sh       Builds, deploys, initializes, seeds the pool, runs one full loan cycle
 ```
+
+## Deployment
+
+Live on Stellar testnet:
+
+| Contract | Address |
+|---|---|
+| Capital Pool | [`CBIDZFVYXVAFNJUDKZAB43JIY23BQMO56PKO6HUYI43S4XU2HNHTTVF2`](https://stellar.expert/explorer/testnet/contract/CBIDZFVYXVAFNJUDKZAB43JIY23BQMO56PKO6HUYI43S4XU2HNHTTVF2) |
+| Receivables | [`CC7YS73X7J6AIAVF6HSI62NH4AVHEEBMSQBBQUCCFMIQTRJS7V6FOVYO`](https://stellar.expert/explorer/testnet/contract/CC7YS73X7J6AIAVF6HSI62NH4AVHEEBMSQBBQUCCFMIQTRJS7V6FOVYO) |
+| Token | [`CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC`](https://stellar.expert/explorer/testnet/contract/CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC), the native XLM asset contract, standing in for USDC on testnet |
+
+Example transactions:
+
+- [Advance](https://stellar.expert/explorer/testnet/tx/0429899b47bd54f3c37e2ae172878f28e161e35ba00e5e7d9d9d6f746b65b86b): `submit_receivable` registers the invoice and the pool pays 420 XLM to the borrower in the same transaction.
+- [Repayment](https://stellar.expert/explorer/testnet/tx/264e5b3fe13524e1907eefd61378f04908236bcc404aa60d16886e9d6cd59030): `repay_loan` marks an advance repaid and closes it in the pool.
+- [Deposit](https://stellar.expert/explorer/testnet/tx/3e8cbcd15acc5bc8ee99ef50e518e1379264b8470f901c726103a3d31434ecd0): 1,000 XLM into the Capital Pool.
 
 ## Status
 
 | Item | Status |
 |---|---|
-| Contracts written, with `DataKey`-based storage | Done |
-| Unit + integration tests (47 tests, real cross-contract calls) | Done, all passing |
-| Native `cargo test` run | Verified in this environment |
-| `wasm32v1-none` release build | Not yet run — see [Build Environment Note](#build-environment-note) |
-| Deployed to testnet | Not yet done — run `scripts/deploy.sh` locally |
-| Contract addresses / tx hashes | Pending the deploy step above |
+| Capital Pool and Receivables contracts | Done |
+| Tests | 47 passing: 20 in `capital-pool`, 27 in `receivables` |
+| Testnet deployment | Live, addresses above |
+| Web app | Calls these contracts directly from the browser |
 
-## Build Environment Note
+## Build, test and deploy
 
-These contracts were written and **tested using `cargo test` against
-`soroban-sdk`'s native test harness** (the same harness Soroban's own docs
-recommend for contract tests — it runs your contract logic against a
-simulated host environment, not as compiled WASM, so it exercises real
-storage, auth, events, and cross-contract calls). All 47 tests pass.
-
-What wasn't possible in the sandbox this was authored in: producing the
-actual deployable `.wasm` artifacts. That requires the `wasm32v1-none` Rust
-target (Stellar's current recommended target as of Rust 1.84+, replacing
-the older `wasm32-unknown-unknown`) installed via `rustup`, and this
-environment only had network access to package registries (crates.io, npm,
-apt), not `static.rust-lang.org` where Rust's target components are hosted.
-So: **the logic is real and tested; the final build + deploy step needs to
-run on a machine with a normal Rust toolchain.** That's a 10-minute job —
-see below.
-
-## Setup (run locally)
+Requires Rust 1.84 or later and the Stellar CLI.
 
 ```bash
-# 1. Install Rust 1.84+ if you don't have it
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# 2. Add the WASM target Soroban uses
+# The WASM target Soroban uses
 rustup target add wasm32v1-none
 
-# 3. Install the Stellar CLI
+# Stellar CLI
 brew install stellar-cli
 # or: cargo install --locked stellar-cli
 
-# 4. Build
+# Build
 cargo build --target wasm32v1-none --release --workspace
 
-# 5. Run tests (works without the wasm target too)
+# Test
 cargo test --workspace
 
-# 6. Deploy to testnet, seed the pool, run one full loan cycle
+# Deploy to testnet, seed the pool, run one full loan cycle
 chmod +x scripts/deploy.sh
 ./scripts/deploy.sh
 ```
 
-`scripts/deploy.sh` handles the full sequence from the brief: deploy pool →
-deploy receivables → initialize pool with receivables as the sole
-authorized disburser → seed pool with 10,000 test USDC → run one complete
-submit → disburse → repay cycle as a test borrower → write all addresses
-and transaction hashes to `deploy-output.env`.
+`scripts/deploy.sh` deploys the Capital Pool, deploys Receivables, initializes
+the pool with Receivables as its only authorized disburser, seeds the pool with
+1,000 XLM, runs one submit, disburse and repay cycle as a test borrower, and
+writes every address and transaction hash to `deploy-output.env`.
 
 ## Architecture
 
@@ -82,107 +77,88 @@ and transaction hashes to `deploy-output.env`.
                  +-----------------------+
    borrower ---> | Receivables Contract  |
                  +-----------+-----------+
-                              | disburse_loan(borrower, amount)
-                              | (only this contract is trusted)
-                              v
+                             | disburse_loan(borrower, amount)
+                             | (only this contract is trusted)
+                             v
                  +-----------------------+
-                 |   Capital Pool        | ---> borrower wallet (USDC)
+                 |   Capital Pool        | ---> borrower wallet
                  |   Contract            |
                  +-----------------------+
 ```
 
-Deploy order matters, and matches the brief exactly:
+Deploy order matters:
 
-1. Deploy **Capital Pool Contract** -> get its address
-2. Deploy **Receivables Contract**, `initialize(capital_pool_address)`
-3. `initialize(admin, token, receivables_contract_address)` on the **Capital
-   Pool Contract** — this is what locks `disburse_loan` down to only ever
-   being callable by that one Receivables Contract address. Any other
-   caller — including the pool's own admin, including a borrower calling
-   directly — is rejected. This is enforced by Soroban's native
-   contract-to-contract authorization (a contract calling another contract
-   is automatically authorized *as itself*, and `require_auth()` on that
-   stored address checks the real caller identity, not a signature anyone
-   could forge).
+1. Deploy the **Capital Pool** and note its address.
+2. Deploy **Receivables** and call `initialize(capital_pool_address)`.
+3. Call `initialize_cp(admin, token, receivables_contract_address)` on the
+   **Capital Pool**. This locks `disburse_loan` to that one Receivables address.
+   Any other caller is rejected, including the pool's own admin and a borrower
+   calling directly. Soroban's contract-to-contract authorization enforces it:
+   a contract calling another contract is authorized as itself, and
+   `require_auth()` on the stored address checks the real caller.
 
-Verified directly in tests:
+The test
 [`pool_disburse_loan_cannot_be_called_by_a_contract_other_than_receivables`](contracts/receivables/src/test.rs)
-deploys a second, structurally identical "decoy" Receivables contract and
-proves it cannot trigger a disbursement from the same pool.
+deploys a second, identical "decoy" Receivables contract and shows it cannot
+trigger a disbursement from the same pool.
 
 ### Storage: `DataKey`, not `Map`
 
-Both contracts use a `DataKey` enum (the idiomatic Soroban pattern) instead
-of a single `Map<K, V>` collection:
+Both contracts use a `DataKey` enum, the idiomatic Soroban pattern, rather than
+a single `Map<K, V>`:
 
-- **Capital Pool** — all fields are scalars/Addresses (admin, token,
-  receivables address, balances, counters), so they live in **instance
-  storage** under individual `DataKey` variants (`DataKey::PoolBalance`,
-  `DataKey::TotalDeposited`, etc). Instance storage is the right fit here:
-  small, fixed-size data, read on essentially every call.
-- **Receivables** — loans are unbounded and grow over time, so each loan
-  lives in its own **persistent storage** entry keyed by
-  `DataKey::Loan(invoice_hash)` — a "variable" DataKey. This means reading
-  or writing one loan never touches any other loan's ledger entry, and the
-  contract can hold an arbitrary number of loans without bumping into
-  instance storage's size ceiling. Each write also extends that entry's
-  TTL so it doesn't expire mid-demo.
+- **Capital Pool.** Every field is a scalar or an address (admin, token,
+  receivables address, balances, counters), so each lives in **instance
+  storage** under its own key, such as `DataKey::PoolBalance`. Instance storage
+  suits small, fixed-size data that almost every call reads.
+- **Receivables.** Loans grow without bound, so each one lives in its own
+  **persistent storage** entry under `DataKey::Loan(invoice_hash)`. Reading or
+  writing one loan never touches another, and the contract can hold any number
+  of loans without reaching the instance storage size limit. Every write also
+  extends that entry's TTL.
 
-### Deviations from the original brief (flagged, not silent)
+### Design decisions
 
-The brief asked me to flag anything unclear or any place I saw a better
-structure before writing production code. Four small deviations, kept
-deliberately minimal:
+1. **`initialize_cp` takes three parameters:** `admin`, `token` and the
+   Receivables address. The pool has to know the Receivables address to enforce
+   the trust boundary above. A separate one-time setter would also work, but it
+   would need the same lock.
+2. **`close_loan` on the Capital Pool.** `repay_loan` calls it, so
+   `get_pool_stats().active_loans` goes down when a loan is repaid instead of
+   only ever going up.
+3. **Amounts are `i128`, not `u128`.** Soroban's token interface, including the
+   Stellar Asset Contract used for real and testnet USDC, uses `i128`
+   throughout. Matching it avoids casts at every token call and the truncation
+   bugs they invite. Both contracts reject non-positive amounts.
+4. **An "empty" invoice hash means the all-zero hash.** `BytesN<32>` is always
+   exactly 32 bytes, so it cannot be empty. The contract rejects the all-zero
+   hash, which is what a client that never hashed an invoice would send.
 
-1. **`Capital Pool.initialize` takes three params, not two.** The brief's
-   function spec listed `(admin, token)`, but the "How the Two Contracts
-   Connect" section requires the pool to know the Receivables Contract
-   address to enforce the trust boundary. There's no way to do both without
-   adding the third param (or a separate one-time
-   `set_receivables_contract` call — happy to switch to that pattern if you
-   prefer it split out, but it has to be lockable exactly once either way).
-2. **Added `close_loan`** on the Capital Pool, called automatically by
-   `repay_loan`. Not in the original function list, but without it
-   `get_pool_stats().active_loans` would only ever go up, never down, which
-   makes the read-only pool view ecosystem partners see during the demo
-   misleading once a loan is repaid.
-3. **Amounts are `i128`, not `u128`.** Soroban's token interface (including
-   the Stellar Asset Contract / SAC interface used for real and testnet
-   USDC) is defined in terms of `i128` throughout. Using `u128` in our
-   contracts would mean constant casting at every token call and a real
-   risk of silent truncation bugs. All amounts here are `i128` and the
-   contracts reject non-positive values explicitly.
-4. **"Empty invoice hash" means "not the zero hash."** `BytesN<32>` is
-   fixed-length by construction (always exactly 32 bytes) so it can never
-   be "empty" in the sense of zero-length. We reject the degenerate
-   all-zero hash instead, which is the realistic equivalent for a client
-   that failed to actually hash an invoice.
+## Contract interfaces
 
-## Contract Interfaces (ABI)
-
-### Capital Pool Contract
+### Capital Pool
 
 | Function | Params | Returns | Auth |
 |---|---|---|---|
-| `initialize` | `admin: Address, token: Address, receivables_contract: Address` | `Result<(), PoolError>` | `admin` |
+| `initialize_cp` | `admin: Address, token: Address, receivables_contract: Address` | `Result<(), PoolError>` | `admin` |
 | `deposit` | `depositor: Address, amount: i128` | `Result<i128, PoolError>` (new pool balance) | `depositor` |
-| `disburse_loan` | `borrower: Address, loan_amount: i128` | `Result<(), PoolError>` | Receivables Contract only |
-| `close_loan` | — | `Result<(), PoolError>` | Receivables Contract only |
-| `get_pool_stats` | — | `PoolStats { total_deposited, pool_balance, total_disbursed, active_loans }` | none |
-| `get_receivables_contract` | — | `Address` | none |
-| `get_token` | — | `Address` | none |
+| `disburse_loan` | `borrower: Address, loan_amount: i128` | `Result<(), PoolError>` | Receivables contract only |
+| `close_loan` | none | `Result<(), PoolError>` | Receivables contract only |
+| `get_pool_stats` | none | `PoolStats { total_deposited, pool_balance, total_disbursed, active_loans }` | none |
+| `get_receivables_contract` | none | `Address` | none |
+| `get_token` | none | `Address` | none |
 
 `PoolError`: `AlreadyInitialized=1, NotInitialized=2, NotAuthorizedCaller=3, InsufficientPoolBalance=4, InvalidAmount=5, NoActiveLoansToClose=6`
 
 Events: `("deposited",) -> PoolDeposited{depositor, amount, new_pool_balance, timestamp}`,
 `("disbursed",) -> LoanDisbursed{borrower, loan_amount, remaining_pool_balance, timestamp}`
 
-### Receivables Contract
+### Receivables
 
 | Function | Params | Returns | Auth |
 |---|---|---|---|
-| `initialize` | `capital_pool: Address` | `Result<(), ReceivablesError>` | none (deployer-run once) |
-| `submit_receivable` | `borrower: Address, invoice_hash: BytesN<32>, invoice_amount: i128, buyer: Address` | `Result<i128, ReceivablesError>` (loan amount) | `borrower` |
+| `initialize` | `capital_pool: Address` | `Result<(), ReceivablesError>` | none (run once by the deployer) |
+| `submit_receivable` | `borrower: Address, invoice_hash: BytesN<32>, invoice_amount: i128, buyer: Address` | `Result<i128, ReceivablesError>` (advance amount) | `borrower` |
 | `get_loan_status` | `invoice_hash: BytesN<32>` | `Result<LoanRecord, ReceivablesError>` | none |
 | `repay_loan` | `invoice_hash: BytesN<32>, repayment_amount: i128` | `Result<(), ReceivablesError>` | original `borrower` |
 
@@ -193,19 +169,14 @@ Events: `("deposited",) -> PoolDeposited{depositor, amount, new_pool_balance, ti
 Events: `("submitted",) -> ReceivableSubmitted{borrower, invoice_hash, invoice_amount, loan_amount, timestamp}`,
 `("repaid",) -> LoanRepaid{borrower, invoice_hash, repayment_amount, timestamp}`
 
-**Note on `buyer`:** the brief marks this optional for the POC. Soroban
-doesn't have an ergonomic nullable `Address`, so the frontend should pass a
-placeholder address (e.g. the borrower's own address, or a well-known
-zero/burn address you designate) when there's no real buyer yet. No
-verification of `buyer` happens in this contract — that's Month 2/3 scope.
+**`buyer`:** Soroban has no ergonomic nullable `Address`, so callers without a
+real buyer pass a placeholder address. The contract does not verify `buyer` yet.
 
-**Note on decimals:** `invoice_amount`, `loan_amount`, and all token amounts
-are raw `i128` values in the token contract's smallest unit. The frontend
-is responsible for scaling — e.g. if the token uses 7 decimals (standard
-for Stellar classic assets wrapped as SAC), "$10" is `100_000_000`. The $10
-floor (`MIN_INVOICE_AMOUNT`) is currently a *raw* constant of `10` in the
-contract, which assumes whatever scale the frontend consistently uses —
-flag if you want this expressed against a fixed decimal count instead.
+**Decimals:** `invoice_amount`, `loan_amount` and all token amounts are raw
+`i128` values in the token's smallest unit. Callers handle scaling: with 7
+decimals, standard for Stellar assets, $10 is `100_000_000`. The minimum invoice
+(`MIN_INVOICE_AMOUNT`) is currently a raw `10`, so it depends on the caller's
+scale.
 
 ## Testing
 
@@ -215,32 +186,31 @@ cargo test --workspace
 
 47 tests, all passing:
 
-- **`capital-pool`** (20 tests): initialization guards, deposit accounting,
-  the disbursement auth lockdown, insufficient-balance handling, pool stats
-  accuracy across multiple loans, event emission.
-- **`receivables`** (27 tests): LTV math (including integer-division
-  rounding), duplicate invoice rejection (keyed by hash, not borrower),
-  borrower auth enforcement on both submit and repay, the **real
-  cross-contract disbursement** (two actual deployed contracts, a genuine
-  token transfer, not a stub), atomic rollback when the pool can't cover a
-  loan, the full submit -> disburse -> repay lifecycle, and — the most
-  important one — proof that a second, decoy Receivables contract cannot
-  trigger disbursement from a pool that was initialized to trust only the
-  original.
+- **`capital-pool`** (20): initialization guards, deposit accounting, the
+  disbursement lock, insufficient-balance handling, pool stats across several
+  loans, and events.
+- **`receivables`** (27): the 75% advance math, including integer rounding;
+  duplicate rejection keyed by hash rather than borrower; borrower auth on submit
+  and repay; a real cross-contract disbursement between two deployed contracts
+  with a genuine token transfer; full rollback when the pool cannot cover an
+  advance; the full submit, disburse and repay cycle; and the decoy-contract test
+  described above.
 
-Run a single test: `cargo test -p receivables full_loan_cycle_submit_disburse_repay`
+Run one test: `cargo test -p receivables full_loan_cycle_submit_disburse_repay`
 
-## What This POC Is Not
+## Limitations
 
-Scope is deliberately narrow so we don't over-engineer the proof:
+The scope is deliberately narrow. In this version:
 
-- No credit scoring — LTV fixed at 75% for all loans
-- No buyer verification or buyer signature step
-- No liquidation logic
-- No Trust Circle / vouching (Month 3)
-- No behavioral monitoring (Month 3 backend)
-- No yield calculation for depositors
-- No real USDC required — testnet/mock token is fine
+- `repay_loan` records the repayment and closes the loan, but **no tokens move
+  back to the pool**. The test `repay_loan_does_not_return_funds_to_pool_in_poc`
+  pins this behavior.
+- The pool has **no withdraw function** and issues no share tokens.
+- The token on testnet is native XLM, standing in for USDC.
+- The advance rate is fixed at 75%. There is no credit scoring or fee.
+- There is no buyer verification or buyer signature step.
+- There is no liquidation logic, Trust Circle vouching, behavioral monitoring,
+  or depositor yield calculation.
 
 ## License
 
