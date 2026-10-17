@@ -61,6 +61,8 @@ fn initialize_sets_all_fields_and_zeroes_stats() {
             total_deposited: 0,
             pool_balance: 0,
             total_disbursed: 0,
+            total_repaid: 0,
+            total_withdrawn: 0,
             active_loans: 0,
         }
     );
@@ -331,28 +333,181 @@ fn multiple_disbursements_accumulate_active_loans_and_totals() {
     assert_eq!(stats.active_loans, 2);
 }
 
+/// Lends `loan` out of a pool seeded with `seed`, and returns the borrower.
+fn pool_with_loan(s: &TestSetup, seed: i128, loan: i128) -> Address {
+    let depositor = Address::generate(&s.env);
+    s.token_admin.mint(&depositor, &seed);
+    s.pool_client.deposit(&depositor, &seed);
+    let borrower = Address::generate(&s.env);
+    s.pool_client.disburse_loan(&borrower, &loan);
+    borrower
+}
+
 #[test]
-fn close_loan_decrements_active_count() {
+fn record_repayment_books_funds_and_closes_loan() {
+    let s = setup();
+    init_pool(&s);
+    let borrower = pool_with_loan(&s, 5_000, 2_000);
+    assert_eq!(s.pool_client.get_pool_stats().active_loans, 1);
+
+    // The Receivables contract moves the funds, then asks the pool to book them.
+    s.token_client.transfer(&borrower, &s.pool_client.address, &2_000);
+    let new_balance = s.pool_client.record_repayment(&2_000);
+
+    assert_eq!(new_balance, 5_000);
+    let stats = s.pool_client.get_pool_stats();
+    assert_eq!(stats.active_loans, 0);
+    assert_eq!(stats.pool_balance, 5_000);
+    assert_eq!(stats.total_repaid, 2_000);
+    assert_eq!(s.token_client.balance(&s.pool_client.address), 5_000);
+}
+
+#[test]
+fn record_repayment_rejected_when_funds_did_not_arrive() {
+    let s = setup();
+    init_pool(&s);
+    pool_with_loan(&s, 5_000, 2_000);
+
+    let result = s.pool_client.try_record_repayment(&2_000);
+    assert_eq!(result, Err(Ok(PoolError::RepaymentNotReceived)));
+    assert_eq!(s.pool_client.get_pool_stats().active_loans, 1);
+}
+
+#[test]
+fn record_repayment_with_no_active_loans_rejected() {
+    let s = setup();
+    init_pool(&s);
+    let result = s.pool_client.try_record_repayment(&100);
+    assert_eq!(result, Err(Ok(PoolError::NoActiveLoansToClose)));
+}
+
+#[test]
+fn record_repayment_rejects_zero_amount() {
+    let s = setup();
+    init_pool(&s);
+    pool_with_loan(&s, 5_000, 2_000);
+    let result = s.pool_client.try_record_repayment(&0);
+    assert_eq!(result, Err(Ok(PoolError::InvalidAmount)));
+}
+
+#[test]
+fn deposit_is_tracked_per_depositor() {
+    let s = setup();
+    init_pool(&s);
+    let alice = Address::generate(&s.env);
+    let bob = Address::generate(&s.env);
+    s.token_admin.mint(&alice, &5_000);
+    s.token_admin.mint(&bob, &5_000);
+
+    s.pool_client.deposit(&alice, &1_000);
+    s.pool_client.deposit(&alice, &500);
+    s.pool_client.deposit(&bob, &2_000);
+
+    assert_eq!(s.pool_client.get_deposit(&alice), 1_500);
+    assert_eq!(s.pool_client.get_deposit(&bob), 2_000);
+    assert_eq!(s.pool_client.get_deposit(&Address::generate(&s.env)), 0);
+}
+
+#[test]
+fn withdraw_returns_tokens_to_depositor() {
+    let s = setup();
+    init_pool(&s);
+    let depositor = Address::generate(&s.env);
+    s.token_admin.mint(&depositor, &5_000);
+    s.pool_client.deposit(&depositor, &4_000);
+
+    let new_balance = s.pool_client.withdraw(&depositor, &1_500);
+
+    assert_eq!(new_balance, 2_500);
+    assert_eq!(s.token_client.balance(&depositor), 2_500);
+    assert_eq!(s.pool_client.get_deposit(&depositor), 2_500);
+    let stats = s.pool_client.get_pool_stats();
+    assert_eq!(stats.pool_balance, 2_500);
+    assert_eq!(stats.total_withdrawn, 1_500);
+    assert_eq!(stats.total_deposited, 4_000);
+}
+
+#[test]
+fn withdraw_more_than_own_deposit_rejected() {
+    let s = setup();
+    init_pool(&s);
+    let alice = Address::generate(&s.env);
+    let bob = Address::generate(&s.env);
+    s.token_admin.mint(&alice, &5_000);
+    s.token_admin.mint(&bob, &5_000);
+    s.pool_client.deposit(&alice, &1_000);
+    s.pool_client.deposit(&bob, &4_000);
+
+    // The pool holds 5,000, but Alice only put in 1,000.
+    let result = s.pool_client.try_withdraw(&alice, &1_001);
+    assert_eq!(result, Err(Ok(PoolError::WithdrawalExceedsDeposit)));
+}
+
+#[test]
+fn withdraw_limited_to_liquidity_not_out_on_loan() {
     let s = setup();
     init_pool(&s);
     let depositor = Address::generate(&s.env);
     s.token_admin.mint(&depositor, &5_000);
     s.pool_client.deposit(&depositor, &5_000);
+    s.pool_client.disburse_loan(&Address::generate(&s.env), &4_000);
 
-    let borrower = Address::generate(&s.env);
-    s.pool_client.disburse_loan(&borrower, &2_000);
-    assert_eq!(s.pool_client.get_pool_stats().active_loans, 1);
+    let result = s.pool_client.try_withdraw(&depositor, &2_000);
+    assert_eq!(result, Err(Ok(PoolError::InsufficientPoolBalance)));
 
-    s.pool_client.close_loan();
-    assert_eq!(s.pool_client.get_pool_stats().active_loans, 0);
+    s.pool_client.withdraw(&depositor, &1_000);
+    assert_eq!(s.pool_client.get_pool_stats().pool_balance, 0);
 }
 
 #[test]
-fn close_loan_with_no_active_loans_rejected() {
+fn withdraw_zero_or_negative_rejected() {
     let s = setup();
     init_pool(&s);
-    let result = s.pool_client.try_close_loan();
-    assert_eq!(result, Err(Ok(PoolError::NoActiveLoansToClose)));
+    let depositor = Address::generate(&s.env);
+    s.token_admin.mint(&depositor, &1_000);
+    s.pool_client.deposit(&depositor, &1_000);
+
+    assert_eq!(s.pool_client.try_withdraw(&depositor, &0), Err(Ok(PoolError::InvalidAmount)));
+    assert_eq!(s.pool_client.try_withdraw(&depositor, &-5), Err(Ok(PoolError::InvalidAmount)));
+}
+
+#[test]
+fn withdraw_emits_withdrawn_event() {
+    let s = setup();
+    init_pool(&s);
+    let depositor = Address::generate(&s.env);
+    s.token_admin.mint(&depositor, &1_000);
+    s.pool_client.deposit(&depositor, &1_000);
+    s.pool_client.withdraw(&depositor, &400);
+
+    let events = s.env.events().all();
+    let last = events.last().unwrap();
+    let topics: soroban_sdk::Vec<soroban_sdk::Val> = last.1.clone();
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&s.env);
+    assert_eq!(topic0, Symbol::new(&s.env, "withdrawn"));
+}
+
+#[test]
+fn withdraw_without_depositor_auth_fails() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let receivables = Address::generate(&env);
+    let token_admin_addr = Address::generate(&env);
+
+    let pool_id = env.register(CapitalPoolContract, ());
+    let pool_client = CapitalPoolContractClient::new(&env, &pool_id);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin_addr);
+    let token_admin = token::StellarAssetClient::new(&env, &token_id.address());
+
+    env.mock_all_auths();
+    pool_client.initialize_cp(&admin, &token_id.address(), &receivables);
+    let depositor = Address::generate(&env);
+    token_admin.mint(&depositor, &1_000);
+    pool_client.deposit(&depositor, &1_000);
+
+    env.set_auths(&[]);
+    let result = pool_client.try_withdraw(&depositor, &500);
+    assert!(result.is_err());
 }
 
 #[test]

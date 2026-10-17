@@ -10,7 +10,9 @@ doctest = false
 
 [dependencies]
 soroban-sdk = { workspace = true }
-capital-pool = { path = "../capital-pool" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+# Tests deploy the real pool. Kept out of [dependencies] so the pool's
+# functions are not compiled into the Receivables contract.
+capital-pool = { path = "../capital-pool" }

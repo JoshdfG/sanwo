@@ -125,6 +125,24 @@ REPAY_TX=$(stellar contract invoke \
 echo "Repay tx: $REPAY_TX"
 
 echo ""
+echo "== Step 8: Withdraw part of the seed deposit =="
+
+WITHDRAW_TX=$(stellar contract invoke \
+  --id "$POOL_ID" \
+  --source-account "$IDENTITY" \
+  --network "$NETWORK" \
+  --send=yes \
+  -- withdraw \
+  --depositor "$DEPLOYER" \
+  --amount 500000000)
+
+echo "Withdraw tx: $WITHDRAW_TX"
+
+echo ""
+echo "== Pool stats =="
+stellar contract invoke --id "$POOL_ID" --source-account "$IDENTITY" --network "$NETWORK" -- get_pool_stats
+
+echo ""
 echo "== Writing output =="
 cat >"$OUT_FILE" <<EOF
 NETWORK=$NETWORK
@@ -136,6 +154,7 @@ BORROWER=$BORROWER
 SUBMIT_TX=$SUBMIT_TX
 DEPOSIT_TX=$DEPOSIT_TX
 REPAY_TX=$REPAY_TX
+WITHDRAW_TX=$WITHDRAW_TX
 EOF
 
 cat "$OUT_FILE"

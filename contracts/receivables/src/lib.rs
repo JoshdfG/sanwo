@@ -13,6 +13,7 @@ mod capital_pool {
     #[contractclient(name = "Client")]
     pub trait CapitalPoolInterface {
         fn disburse_loan(env: Env, borrower: Address, loan_amount: i128);
-        fn close_loan(env: Env);
+        fn record_repayment(env: Env, amount: i128) -> i128;
+        fn get_token(env: Env) -> Address;
     }
 }

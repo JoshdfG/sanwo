@@ -1,5 +1,5 @@
 use crate::{capital_pool, storage::*};
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env};
+use soroban_sdk::{contract, contractimpl, symbol_short, token::TokenClient, Address, BytesN, Env};
 
 #[contract]
 pub struct ReceivablesContract;
@@ -91,6 +91,10 @@ impl ReceivablesContract {
             .ok_or(ReceivablesError::LoanNotFound)
     }
 
+    /// Repays an active advance. `repayment_amount` must cover what is owed,
+    /// and the contract moves exactly what is owed (the advance; the PoC charges
+    /// no fee) from the borrower into the Capital Pool, so an overpayment is
+    /// never kept.
     pub fn repay_loan(
         env: Env,
         invoice_hash: BytesN<32>,
@@ -115,25 +119,28 @@ impl ReceivablesContract {
             return Err(ReceivablesError::RepaymentTooLow);
         }
 
+        let owed = record.loan_amount;
+        let capital_pool: Address = env.storage().instance().get(&DataKey::CapitalPool).unwrap();
+        let pool_client = capital_pool::Client::new(&env, &capital_pool);
+
+        // Move the funds first, then let the pool verify and book them.
+        let token = TokenClient::new(&env, &pool_client.get_token());
+        token.transfer(&record.borrower, &capital_pool, &owed);
+        pool_client.record_repayment(&owed);
+
         record.status = LoanStatus::Repaid;
         env.storage().persistent().set(&loan_key, &record);
         Self::bump_loan_ttl(&env, &loan_key);
-
-        let timestamp = env.ledger().timestamp();
 
         env.events().publish(
             (symbol_short!("repaid"),),
             LoanRepaid {
                 borrower: record.borrower,
                 invoice_hash,
-                repayment_amount,
-                timestamp,
+                repayment_amount: owed,
+                timestamp: env.ledger().timestamp(),
             },
         );
-
-        let capital_pool: Address = env.storage().instance().get(&DataKey::CapitalPool).unwrap();
-        let pool_client = capital_pool::Client::new(&env, &capital_pool);
-        pool_client.close_loan();
 
         Ok(())
     }

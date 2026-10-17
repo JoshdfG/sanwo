@@ -375,7 +375,7 @@ fn repay_loan_decrements_pool_active_loan_count() {
 }
 
 #[test]
-fn repay_loan_does_not_return_funds_to_pool_in_poc() {
+fn repay_loan_returns_funds_to_pool() {
     let h = deploy();
     seed_pool(&h, 10_000);
 
@@ -386,14 +386,37 @@ fn repay_loan_does_not_return_funds_to_pool_in_poc() {
     let loan_amount = h
         .receivables
         .submit_receivable(&borrower, &hash, &1_000, &buyer);
-    let balance_after_disbursement = h.pool.get_pool_stats().pool_balance;
+    assert_eq!(h.pool.get_pool_stats().pool_balance, 10_000 - loan_amount);
+    assert_eq!(h.token.balance(&borrower), loan_amount);
 
     h.receivables.repay_loan(&hash, &loan_amount);
 
-    assert_eq!(
-        h.pool.get_pool_stats().pool_balance,
-        balance_after_disbursement
-    );
+    let stats = h.pool.get_pool_stats();
+    assert_eq!(stats.pool_balance, 10_000);
+    assert_eq!(stats.total_repaid, loan_amount);
+    assert_eq!(h.token.balance(&h.pool.address), 10_000);
+    assert_eq!(h.token.balance(&borrower), 0);
+}
+
+#[test]
+fn repay_loan_fails_and_stays_active_when_borrower_cannot_pay() {
+    let h = deploy();
+    seed_pool(&h, 10_000);
+
+    let borrower = Address::generate(&h.env);
+    let buyer = Address::generate(&h.env);
+    let hash = hash_of(&h.env, 1);
+
+    let loan_amount = h
+        .receivables
+        .submit_receivable(&borrower, &hash, &1_000, &buyer);
+    // The borrower spends the advance elsewhere.
+    h.token.transfer(&borrower, &Address::generate(&h.env), &loan_amount);
+
+    let result = h.receivables.try_repay_loan(&hash, &loan_amount);
+    assert!(result.is_err());
+    assert_eq!(h.receivables.get_loan_status(&hash).status, LoanStatus::Active);
+    assert_eq!(h.pool.get_pool_stats().active_loans, 1);
 }
 
 #[test]
@@ -414,7 +437,7 @@ fn repay_loan_rejects_amount_below_principal() {
 }
 
 #[test]
-fn repay_loan_accepts_overpayment() {
+fn repay_loan_overpayment_collects_only_what_is_owed() {
     let h = deploy();
     seed_pool(&h, 10_000);
 
@@ -425,12 +448,16 @@ fn repay_loan_accepts_overpayment() {
     let loan_amount = h
         .receivables
         .submit_receivable(&borrower, &hash, &1_000, &buyer);
+    h.token_admin.mint(&borrower, &500);
 
     h.receivables.repay_loan(&hash, &(loan_amount + 500));
     assert_eq!(
         h.receivables.get_loan_status(&hash).status,
         LoanStatus::Repaid
     );
+    // The extra 500 stays with the borrower.
+    assert_eq!(h.token.balance(&borrower), 500);
+    assert_eq!(h.pool.get_pool_stats().pool_balance, 10_000);
 }
 
 #[test]
@@ -548,7 +575,33 @@ fn full_loan_cycle_submit_disburse_repay() {
     let stats = h.pool.get_pool_stats();
     assert_eq!(stats.total_deposited, 10_000);
     assert_eq!(stats.total_disbursed, 3_750);
-    assert_eq!(stats.pool_balance, 10_000 - 3_750);
+    assert_eq!(stats.total_repaid, 3_750);
+    assert_eq!(stats.pool_balance, 10_000);
+}
+
+#[test]
+fn depositor_can_withdraw_after_advance_is_repaid() {
+    let h = deploy();
+    let depositor = Address::generate(&h.env);
+    h.token_admin.mint(&depositor, &10_000);
+    h.pool.deposit(&depositor, &10_000);
+
+    let borrower = Address::generate(&h.env);
+    let buyer = Address::generate(&h.env);
+    let hash = hash_of(&h.env, 1);
+    let loan_amount = h
+        .receivables
+        .submit_receivable(&borrower, &hash, &8_000, &buyer);
+
+    // While 6,000 is out on loan, only 4,000 can leave the pool.
+    assert!(h.pool.try_withdraw(&depositor, &10_000).is_err());
+
+    h.receivables.repay_loan(&hash, &loan_amount);
+    h.pool.withdraw(&depositor, &10_000);
+
+    assert_eq!(h.token.balance(&depositor), 10_000);
+    assert_eq!(h.pool.get_pool_stats().pool_balance, 0);
+    assert_eq!(h.pool.get_deposit(&depositor), 0);
 }
 
 #[test]
